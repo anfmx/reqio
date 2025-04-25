@@ -85,9 +85,9 @@ func doRequest() {
 			}
 			defer resp.Body.Close()
 
-			fmt.Println(resp.Status)
+			fmt.Printf("%s | %s", req.URL, resp.Status)
 			if *writeFile {
-				fmt.Fprintln(file, resp.Status)
+				fmt.Fprintf(file, "%s | %s", req.URL, resp.Status)
 			}
 
 			if *showBody {
@@ -116,6 +116,6 @@ func displayBody(body []interface{}, file *os.File) {
 
 	fmt.Println(string(prettyBody))
 	if *writeFile {
-		fmt.Fprintln(file, string(prettyBody))
+		fmt.Fprintf(file, string(prettyBody), "\n\n")
 	}
 }
