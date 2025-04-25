@@ -5,16 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 )
 
 var (
-	method   = flag.String("m", "GET", "Current method\n")
-	showBody = flag.Bool("b", false, "show response body\n")
-	limit    = flag.Int("limit", 0, "sets limit to body\n")
-	rate     = flag.Int("rate", 0, "sends request per N second\n")
-
-	Client = &http.Client{}
+	method    = flag.String("m", "GET", "Current method\n")
+	showBody  = flag.Bool("b", false, "show response body\n")
+	limit     = flag.Int("limit", 0, "sets limit to body\n")
+	rate      = flag.Int("rate", 0, "sends request per N second\n")
+	writeFile = flag.Bool("f", false, "")
+	Client    = &http.Client{}
 )
 
 func main() {
@@ -41,7 +42,6 @@ func doRequestLoop() {
 	// 	case <-ticker.C:
 	// 	}
 	// }
-
 	for range ticker.C {
 		go doRequest()
 	}
@@ -63,6 +63,8 @@ func urlChanGenerator() chan string {
 
 func doRequest() {
 	urlsChan := urlChanGenerator()
+	file, _ := os.OpenFile("requests.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0744)
+	defer file.Close()
 
 	for {
 		select {
@@ -70,6 +72,7 @@ func doRequest() {
 			if !ok {
 				return
 			}
+
 			req, err := http.NewRequest(*method, url, nil)
 			if err != nil {
 				fmt.Println(err)
@@ -80,36 +83,39 @@ func doRequest() {
 				fmt.Println(err)
 				return
 			}
+			defer resp.Body.Close()
+
 			fmt.Println(resp.Status)
+			if *writeFile {
+				fmt.Fprintln(file, resp.Status)
+			}
+
 			if *showBody {
-				displayBody(resp, []interface{}{})
+				body := []interface{}{}
+				json.NewDecoder(resp.Body).Decode(&body)
+				displayBody(body, file)
 			}
 		}
 	}
-
 }
 
-func displayBody(resp *http.Response, res []interface{}) {
-	json.NewDecoder(resp.Body).Decode(&res)
-
-	if len(res) == 0 {
+func displayBody(body []interface{}, file *os.File) {
+	if len(body) == 0 {
 		fmt.Println("Non-existent url or no response body")
 		return
 	}
 
-	if *limit != 0 && *limit < len(res) {
-		prettyBody, err := json.MarshalIndent(res[:*limit], "", " ")
-		if err != nil {
-			fmt.Println(err)
-		}
-		fmt.Println(string(prettyBody))
-		return
+	if *limit != 0 && *limit < len(body) {
+		body = body[:*limit]
 	}
 
-	prettyBody, err := json.MarshalIndent(res, "", " ")
+	prettyBody, err := json.MarshalIndent(body, "", "    ")
 	if err != nil {
 		fmt.Println(err)
 	}
 
 	fmt.Println(string(prettyBody))
+	if *writeFile {
+		fmt.Fprintln(file, string(prettyBody))
+	}
 }
