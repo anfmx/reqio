@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,36 +27,51 @@ func main() {
 }
 
 func Execute() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	defer cancel()
+
+	fileWriteChan := make(chan string)
+
+	wg := sync.WaitGroup{}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		FileWriter(fileWriteChan)
+	}()
+
+	urlsChan := urlChanGenerator(ctx)
 	if *rate == 0 {
-		doRequest()
-		return
+		doRequest(urlsChan, fileWriteChan)
+	} else {
+		doRequestLoop(urlsChan, fileWriteChan, ctx)
 	}
-	doRequestLoop()
+	close(fileWriteChan)
+	wg.Wait()
 }
 
-func doRequestLoop() {
+// FIXME: writes once then context deny
+func doRequestLoop(urlsChan chan string, fileWriteChan chan string, ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(*rate) * time.Second)
 	defer ticker.Stop()
 
-	// TODO: Replace with `select` and context cancellation
-	//
-	// for {
-	// 	select {
-	// 	case <-ticker.C:
-	// 	}
-	// }
-	for range ticker.C {
-		go doRequest()
+	for {
+		select {
+		case <-ticker.C:
+			go doRequest(urlsChan, fileWriteChan)
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
-func urlChanGenerator() chan string {
+func urlChanGenerator(ctx context.Context) chan string {
 	urlsChan := make(chan string)
 	urls := flag.Args()
 
 	go func() {
-		for i := range urls {
-			urlsChan <- urls[i]
+		for _, url := range urls {
+			urlsChan <- url
 		}
 		close(urlsChan)
 	}()
@@ -61,22 +79,39 @@ func urlChanGenerator() chan string {
 	return urlsChan
 }
 
-func doRequest() {
-	urlsChan := urlChanGenerator()
-	file, _ := os.OpenFile("requests.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0744)
+func FileWriter(fileWriteChan chan string) {
+	if !*writeFile {
+		return
+	}
+
+	file, err := os.OpenFile("requests.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0744)
+	if err != nil {
+		fmt.Println("Cannot open a file to write logs", err)
+		*writeFile = false
+		return
+	}
 	defer file.Close()
 
-	for {
-		select {
-		case url, ok := <-urlsChan:
-			if !ok {
-				return
-			}
+	for data := range fileWriteChan {
+		file.WriteString(data)
+	}
+}
+
+func doRequest(urlsChan chan string, fileWriteChan chan string) {
+	var wg sync.WaitGroup
+
+	for url := range urlsChan {
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+			defer cancel()
 
 			req, err := http.NewRequest(*method, url, nil)
 			if err != nil {
 				fmt.Println(err)
 			}
+			req = req.WithContext(ctx)
 
 			resp, err := Client.Do(req)
 			if err != nil {
@@ -85,37 +120,29 @@ func doRequest() {
 			}
 			defer resp.Body.Close()
 
-			fmt.Printf("%s | %s", req.URL, resp.Status)
-			if *writeFile {
-				fmt.Fprintf(file, "%s | %s", req.URL, resp.Status)
-			}
+			var output strings.Builder
+			output.WriteString(fmt.Sprintf("%s | %s\n", req.URL, resp.Status))
 
 			if *showBody {
 				body := []interface{}{}
 				json.NewDecoder(resp.Body).Decode(&body)
-				displayBody(body, file)
+
+				if len(body) != 0 {
+					if *limit != 0 && *limit < len(body) {
+						body = body[:*limit]
+					}
+					prettyBody, err := json.MarshalIndent(body, "", " ")
+					if err != nil {
+						fmt.Println(err)
+					}
+					output.WriteString(string(prettyBody) + "\n")
+				}
 			}
-		}
+			fmt.Println(output.String())
+			if *writeFile {
+				fileWriteChan <- output.String()
+			}
+		}(url)
 	}
-}
-
-func displayBody(body []interface{}, file *os.File) {
-	if len(body) == 0 {
-		fmt.Println("Non-existent url or no response body")
-		return
-	}
-
-	if *limit != 0 && *limit < len(body) {
-		body = body[:*limit]
-	}
-
-	prettyBody, err := json.MarshalIndent(body, "", "    ")
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	fmt.Println(string(prettyBody))
-	if *writeFile {
-		fmt.Fprintf(file, string(prettyBody), "\n\n")
-	}
+	wg.Wait()
 }
