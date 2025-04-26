@@ -27,7 +27,7 @@ func main() {
 }
 
 func Execute() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
 	fileWriteChan := make(chan string)
@@ -44,21 +44,32 @@ func Execute() {
 	if *rate == 0 {
 		doRequest(urlsChan, fileWriteChan)
 	} else {
-		doRequestLoop(urlsChan, fileWriteChan, ctx)
+		doRequestLoop(fileWriteChan, ctx)
 	}
 	close(fileWriteChan)
 	wg.Wait()
 }
 
 // FIXME: writes once then context deny
-func doRequestLoop(urlsChan chan string, fileWriteChan chan string, ctx context.Context) {
+func doRequestLoop(fileWriteChan chan string, ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(*rate) * time.Second)
 	defer ticker.Stop()
+
+	urls := flag.Args()
+	if len(urls) == 0 {
+		return
+	}
 
 	for {
 		select {
 		case <-ticker.C:
-			go doRequest(urlsChan, fileWriteChan)
+			urlChan := make(chan string, len(urls))
+			for _, url := range urls {
+				urlChan <- url
+			}
+			close(urlChan)
+
+			doRequest(urlChan, fileWriteChan)
 		case <-ctx.Done():
 			return
 		}
@@ -71,11 +82,14 @@ func urlChanGenerator(ctx context.Context) chan string {
 
 	go func() {
 		for _, url := range urls {
-			urlsChan <- url
+			select {
+			case urlsChan <- url:
+			case <-ctx.Done():
+				return
+			}
 		}
 		close(urlsChan)
 	}()
-
 	return urlsChan
 }
 
