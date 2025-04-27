@@ -18,7 +18,9 @@ var (
 	limit     = flag.Int("limit", 0, "sets limit to body\n")
 	rate      = flag.Int("rate", 0, "sends request per N second\n")
 	writeFile = flag.Bool("f", false, "")
-	Client    = &http.Client{}
+	rateLimit = flag.Int("rate-limit", 10, "Use with'--rate' flag to limit overall time of making requests")
+
+	Client = &http.Client{}
 )
 
 func main() {
@@ -27,7 +29,7 @@ func main() {
 }
 
 func Execute() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(*rateLimit))
 	defer cancel()
 
 	fileWriteChan := make(chan string)
