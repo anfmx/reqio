@@ -34,13 +34,12 @@ func Execute() {
 
 	fileWriteChan := make(chan string)
 
-	wg := sync.WaitGroup{}
+	wg := &sync.WaitGroup{}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		FileWriter(fileWriteChan)
-	}()
+	if *writeFile {
+		wg.Add(1)
+		go FileWriter(fileWriteChan, wg)
+	}
 
 	urlsChan := urlChanGenerator(ctx)
 	if *rate == 0 {
@@ -48,11 +47,13 @@ func Execute() {
 	} else {
 		doRequestLoop(fileWriteChan, ctx)
 	}
-	close(fileWriteChan)
-	wg.Wait()
+
+	go func() {
+		close(fileWriteChan)
+		wg.Wait()
+	}()
 }
 
-// FIXME: writes once then context deny
 func doRequestLoop(fileWriteChan chan string, ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(*rate) * time.Second)
 	defer ticker.Stop()
@@ -65,12 +66,7 @@ func doRequestLoop(fileWriteChan chan string, ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			urlChan := make(chan string, len(urls))
-			for _, url := range urls {
-				urlChan <- url
-			}
-			close(urlChan)
-
+			urlChan := urlChanGenerator(ctx)
 			doRequest(urlChan, fileWriteChan)
 		case <-ctx.Done():
 			return
@@ -95,10 +91,8 @@ func urlChanGenerator(ctx context.Context) chan string {
 	return urlsChan
 }
 
-func FileWriter(fileWriteChan chan string) {
-	if !*writeFile {
-		return
-	}
+func FileWriter(fileWriteChan chan string, wg *sync.WaitGroup) {
+	defer wg.Done()
 
 	file, err := os.OpenFile("requests.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0744)
 	if err != nil {
@@ -114,51 +108,82 @@ func FileWriter(fileWriteChan chan string) {
 }
 
 func doRequest(urlsChan chan string, fileWriteChan chan string) {
-	var wg sync.WaitGroup
+	wg := &sync.WaitGroup{}
 
 	for url := range urlsChan {
 		wg.Add(1)
-		go func(url string) {
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-			defer cancel()
-
-			req, err := http.NewRequest(*method, url, nil)
-			if err != nil {
-				fmt.Println(err)
-			}
-			req = req.WithContext(ctx)
-
-			resp, err := Client.Do(req)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-			defer resp.Body.Close()
-
-			var output strings.Builder
-			output.WriteString(fmt.Sprintf("%s | %s\n", req.URL, resp.Status))
-
-			if *showBody {
-				body := []interface{}{}
-				json.NewDecoder(resp.Body).Decode(&body)
-
-				if len(body) != 0 {
-					if *limit != 0 && *limit < len(body) {
-						body = body[:*limit]
-					}
-					prettyBody, err := json.MarshalIndent(body, "", " ")
-					if err != nil {
-						fmt.Println(err)
-					}
-					output.WriteString(string(prettyBody) + "\n")
-				}
-			}
-			fmt.Println(output.String())
-			if *writeFile {
-				fileWriteChan <- output.String()
-			}
-		}(url)
+		go handleRequest(url, fileWriteChan, wg)
 	}
 	wg.Wait()
+}
+
+func handleRequest(url string, fileWriteChan chan string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+
+	req, err := newRequest(url, ctx)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	resp, err := Client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	output, err := processResponse(resp)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(output)
+
+	if *writeFile {
+		fileWriteChan <- output
+	}
+}
+
+func processResponse(resp *http.Response) (string, error) {
+	defer resp.Body.Close()
+
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("%s | %s\n", resp.Request.URL, resp.Status))
+
+	if *showBody {
+		err := processBody(&output, resp)
+		if err != nil {
+			return "", err
+		}
+	}
+	return output.String(), nil
+}
+
+func processBody(output *strings.Builder, resp *http.Response) error {
+	body := []interface{}{}
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	if len(body) != 0 {
+		if *limit != 0 && *limit < len(body) {
+			body = body[:*limit]
+		}
+		prettyBody, err := json.MarshalIndent(body, "", " ")
+		if err != nil {
+			return err
+		}
+		output.WriteString(string(prettyBody) + "\n\n")
+	}
+	return nil
+}
+
+func newRequest(url string, ctx context.Context) (*http.Request, error) {
+	req, err := http.NewRequest(*method, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req.WithContext(ctx), nil
 }
