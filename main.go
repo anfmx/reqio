@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -19,6 +20,7 @@ var (
 	rate      = flag.Int("rate", 0, "sends request per N second\n")
 	writeFile = flag.Bool("f", false, "")
 	rateLimit = flag.Int("rate-limit", 10, "Use with'--rate' flag to limit overall time of making requests")
+	bodyData  = flag.String("d", "", "Needs to send request with json body")
 
 	Client = &http.Client{}
 )
@@ -36,6 +38,7 @@ func Execute() {
 
 	wg := &sync.WaitGroup{}
 
+	// NOTE: To avoid unnecessary handoff there is an additional check
 	if *writeFile {
 		wg.Add(1)
 		go FileWriter(fileWriteChan, wg)
@@ -48,10 +51,8 @@ func Execute() {
 		doRequestLoop(fileWriteChan, ctx)
 	}
 
-	go func() {
-		close(fileWriteChan)
-		wg.Wait()
-	}()
+	wg.Wait()
+	close(fileWriteChan)
 }
 
 func doRequestLoop(fileWriteChan chan string, ctx context.Context) {
@@ -127,7 +128,6 @@ func handleRequest(url string, fileWriteChan chan string, wg *sync.WaitGroup) {
 		fmt.Println(err)
 		return
 	}
-
 	resp, err := Client.Do(req)
 	if err != nil {
 		fmt.Println(err)
@@ -143,7 +143,12 @@ func handleRequest(url string, fileWriteChan chan string, wg *sync.WaitGroup) {
 	fmt.Println(output)
 
 	if *writeFile {
-		fileWriteChan <- output
+		select {
+		case fileWriteChan <- output:
+		case <-ctx.Done():
+			return
+		}
+
 	}
 }
 
@@ -164,7 +169,9 @@ func processResponse(resp *http.Response) (string, error) {
 
 func processBody(output *strings.Builder, resp *http.Response) error {
 	body := []interface{}{}
-	json.NewDecoder(resp.Body).Decode(&body)
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return err
+	}
 
 	if len(body) != 0 {
 		if *limit != 0 && *limit < len(body) {
@@ -180,9 +187,16 @@ func processBody(output *strings.Builder, resp *http.Response) error {
 }
 
 func newRequest(url string, ctx context.Context) (*http.Request, error) {
-	req, err := http.NewRequest(*method, url, nil)
+	var bodyReader io.Reader
+	if *bodyData != "" {
+		bodyReader = strings.NewReader(*bodyData)
+	}
+	req, err := http.NewRequest(*method, url, bodyReader)
 	if err != nil {
 		return nil, err
+	}
+	if *bodyData != "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	return req.WithContext(ctx), nil
