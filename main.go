@@ -41,7 +41,7 @@ func Execute() {
 	// NOTE: To avoid unnecessary handoff there is an additional check
 	if *writeFile {
 		wg.Add(1)
-		go FileWriter(fileWriteChan, wg)
+		go FileWriter(fileWriteChan, wg, ctx)
 	}
 
 	urlsChan := urlChanGenerator(ctx)
@@ -52,7 +52,6 @@ func Execute() {
 	}
 
 	wg.Wait()
-	close(fileWriteChan)
 }
 
 func doRequestLoop(fileWriteChan chan string, ctx context.Context) {
@@ -67,9 +66,23 @@ func doRequestLoop(fileWriteChan chan string, ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			urlChan := urlChanGenerator(ctx)
-			doRequest(urlChan, fileWriteChan)
+
+			innerFileWriterChan := make(chan string)
+			go func() {
+				for data := range innerFileWriterChan {
+					select {
+					case fileWriteChan <- data:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+
+			urlsChan := urlChanGenerator(ctx)
+			doRequest(urlsChan, innerFileWriterChan)
+
 		case <-ctx.Done():
+			close(fileWriteChan)
 			return
 		}
 	}
@@ -92,7 +105,7 @@ func urlChanGenerator(ctx context.Context) chan string {
 	return urlsChan
 }
 
-func FileWriter(fileWriteChan chan string, wg *sync.WaitGroup) {
+func FileWriter(fileWriteChan chan string, wg *sync.WaitGroup, ctx context.Context) {
 	defer wg.Done()
 
 	file, err := os.OpenFile("requests.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0744)
@@ -103,8 +116,16 @@ func FileWriter(fileWriteChan chan string, wg *sync.WaitGroup) {
 	}
 	defer file.Close()
 
-	for data := range fileWriteChan {
-		file.WriteString(data)
+	for {
+		select {
+		case data, ok := <-fileWriteChan:
+			if !ok {
+				return
+			}
+			file.WriteString(data)
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
@@ -115,11 +136,15 @@ func doRequest(urlsChan chan string, fileWriteChan chan string) {
 		wg.Add(1)
 		go handleRequest(url, fileWriteChan, wg)
 	}
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(fileWriteChan)
+	}()
 }
 
 func handleRequest(url string, fileWriteChan chan string, wg *sync.WaitGroup) {
 	defer wg.Done()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 
@@ -148,7 +173,6 @@ func handleRequest(url string, fileWriteChan chan string, wg *sync.WaitGroup) {
 		case <-ctx.Done():
 			return
 		}
-
 	}
 }
 
