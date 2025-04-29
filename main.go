@@ -136,10 +136,9 @@ func doRequest(urlsChan chan string, fileWriteChan chan string) {
 		wg.Add(1)
 		go handleRequest(url, fileWriteChan, wg)
 	}
-	go func() {
-		wg.Wait()
-		close(fileWriteChan)
-	}()
+
+	wg.Wait()
+	close(fileWriteChan)
 }
 
 func handleRequest(url string, fileWriteChan chan string, wg *sync.WaitGroup) {
@@ -192,21 +191,24 @@ func processResponse(resp *http.Response) (string, error) {
 }
 
 func processBody(output *strings.Builder, resp *http.Response) error {
-	body := []interface{}{}
+	var body interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return err
 	}
 
-	if len(body) != 0 {
-		if *limit != 0 && *limit < len(body) {
-			body = body[:*limit]
-		}
-		prettyBody, err := json.MarshalIndent(body, "", " ")
-		if err != nil {
-			return err
-		}
-		output.WriteString(string(prettyBody) + "\n\n")
+	// FIXME: make handler for arrays of objects and objects
+	// FIXME: add check for content-type of body
+	// if len(body) != 0 {
+	// 	if *limit != 0 && *limit < len(body) {
+	// 		body = body[:*limit]
+	// 	}
+	// }
+
+	prettyBody, err := json.MarshalIndent(body, "", " ")
+	if err != nil {
+		return err
 	}
+	output.WriteString(string(prettyBody) + "\n\n")
 	return nil
 }
 
