@@ -24,6 +24,7 @@ go.work.sum
 # logs and docs
 *.txt
 *.md
+*.json
 
 # tracer and profiler
 *.prof
