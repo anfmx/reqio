@@ -25,6 +25,20 @@ var (
 	Client = &http.Client{}
 )
 
+type jsonData struct {
+	Url        string      `json:"url"`
+	StatusCode string      `json:"status_code"`
+	Body       interface{} `json:"body"`
+}
+
+func NewJsonData(url, code string, body interface{}) jsonData {
+	return jsonData{
+		Url:        url,
+		StatusCode: code,
+		Body:       body,
+	}
+}
+
 func main() {
 	flag.Parse()
 	Execute()
@@ -182,7 +196,7 @@ func processResponse(resp *http.Response) (string, error) {
 	var body interface{}
 	json.NewDecoder(resp.Body).Decode(&body)
 
-	jsonResult := map[string]interface{}{"url": resp.Request.URL.String(), "status_code": resp.Status, "body": body}
+	jsonResult := NewJsonData(resp.Request.URL.String(), resp.Status, body)
 	prettyJson, err := json.MarshalIndent(jsonResult, "", " ")
 	if err != nil {
 		return "", err
