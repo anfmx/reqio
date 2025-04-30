@@ -67,9 +67,10 @@ func doRequestLoop(fileWriteChan chan string, ctx context.Context) {
 		select {
 		case <-ticker.C:
 
-			innerFileWriterChan := make(chan string)
+			innerFileWriteChan := make(chan string)
+
 			go func() {
-				for data := range innerFileWriterChan {
+				for data := range innerFileWriteChan {
 					select {
 					case fileWriteChan <- data:
 					case <-ctx.Done():
@@ -79,7 +80,7 @@ func doRequestLoop(fileWriteChan chan string, ctx context.Context) {
 			}()
 
 			urlsChan := urlChanGenerator(ctx)
-			doRequest(urlsChan, innerFileWriterChan)
+			doRequest(urlsChan, innerFileWriteChan)
 
 		case <-ctx.Done():
 			close(fileWriteChan)
@@ -108,7 +109,7 @@ func urlChanGenerator(ctx context.Context) chan string {
 func FileWriter(fileWriteChan chan string, wg *sync.WaitGroup, ctx context.Context) {
 	defer wg.Done()
 
-	file, err := os.OpenFile("requests.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0744)
+	file, err := os.OpenFile("requests.json", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0744)
 	if err != nil {
 		fmt.Println("Cannot open a file to write logs", err)
 		*writeFile = false
@@ -178,38 +179,16 @@ func handleRequest(url string, fileWriteChan chan string, wg *sync.WaitGroup) {
 func processResponse(resp *http.Response) (string, error) {
 	defer resp.Body.Close()
 
-	var output strings.Builder
-	output.WriteString(fmt.Sprintf("%s | %s\n", resp.Request.URL, resp.Status))
-
-	if *showBody {
-		err := processBody(&output, resp)
-		if err != nil {
-			return "", err
-		}
-	}
-	return output.String(), nil
-}
-
-func processBody(output *strings.Builder, resp *http.Response) error {
 	var body interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return err
-	}
+	json.NewDecoder(resp.Body).Decode(&body)
 
-	// FIXME: make handler for arrays of objects and objects
-	// FIXME: add check for content-type of body
-	// if len(body) != 0 {
-	// 	if *limit != 0 && *limit < len(body) {
-	// 		body = body[:*limit]
-	// 	}
-	// }
-
-	prettyBody, err := json.MarshalIndent(body, "", " ")
+	jsonResult := map[string]interface{}{"url": resp.Request.URL.String(), "status_code": resp.Status, "body": body}
+	prettyJson, err := json.MarshalIndent(jsonResult, "", " ")
 	if err != nil {
-		return err
+		return "", err
 	}
-	output.WriteString(string(prettyBody) + "\n\n")
-	return nil
+
+	return string(prettyJson) + "\n", nil
 }
 
 func newRequest(url string, ctx context.Context) (*http.Request, error) {
