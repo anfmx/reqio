@@ -66,11 +66,11 @@ reqio https://yourlink.com/ https://youtube.com/ https://twitch.tv/
 
 ### Answer
 
-```json
+```json5
 {
-  "url": "https://www.yourlink.com/",
-  "status_code": "200 OK",
-  "body": null //if -b flag was not specified or there is no body in reply
+  url: "https://www.yourlink.com/",
+  status_code: "200 OK",
+  body: null, // if -b flag was not specified or there is no body in reply
 }
 ```
 
