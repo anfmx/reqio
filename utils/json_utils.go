@@ -25,21 +25,21 @@ func ProcessResponse(resp *http.Response, showBody bool, limit int) (string, err
 
 	var body interface{}
 	if showBody {
-		var rawBody []byte
-		if limit > 0 {
-			rawBody = make([]byte, limit)
-			n, _ := resp.Body.Read(rawBody)
-			rawBody = rawBody[:n]
-		} else {
-			rawBody, _ = io.ReadAll(resp.Body)
+		rawBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", nil
 		}
 		var parsed interface{}
 		if err := json.Unmarshal(rawBody, &parsed); err == nil {
-			body = parsed
+			slc, ok := parsed.([]interface{})
+			if ok && limit > 0 && limit < len(slc) {
+				body = slc[:limit]
+			} else {
+				body = parsed
+			}
 		} else {
 			body = string(rawBody)
 		}
-		json.NewDecoder(resp.Body).Decode(&body)
 	}
 
 	jsonResult := NewJsonData(resp.Request.URL.String(), resp.Status, body)
