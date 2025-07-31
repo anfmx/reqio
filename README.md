@@ -64,7 +64,7 @@ reqio -f -b --limit 1 --rate 1 --time-limit 10  https://yourlink.com/
 reqio https://yourlink.com/ https://youtube.com/ https://twitch.tv/
 ```
 
-### Answer
+### Response
 
 ```json5
 {
